@@ -21,34 +21,38 @@ function useStreamClient(session, loadingSession, isHost, isParticipant) {
       if (session.status === "completed") return;
 
       try {
-        const { token, userId, userName, userImage } = await sessionApi.getStreamToken();
+        // Fetch two separate tokens — one per client
+        const [videoTokenData, chatTokenData] = await Promise.all([
+          sessionApi.getStreamToken(),
+          sessionApi.getStreamToken(),
+        ]);
 
+        const { token: videoToken, userId, userName, userImage } = videoTokenData;
+        const { token: chatToken } = chatTokenData;
+
+        // ✅ Video client — uses videoToken
         const client = await initializeStreamClient(
-          {
-            id: userId,
-            name: userName,
-            image: userImage,
-          },
-          token
+          { id: userId, name: userName, image: userImage },
+          videoToken
         );
-
         setStreamClient(client);
 
         videoCall = client.call("default", session.callId);
         await videoCall.join({ create: true });
         setCall(videoCall);
 
+        // ✅ Chat client — uses chatToken (separate token = no AccessKeyError)
         const apiKey = import.meta.env.VITE_STREAM_API_KEY;
         chatClientInstance = StreamChat.getInstance(apiKey);
 
-        await chatClientInstance.connectUser(
-          {
-            id: userId,
-            name: userName,
-            image: userImage,
-          },
-          token
-        );
+        // avoid reconnecting if already connected with same user
+        if (chatClientInstance.userID !== userId) {
+          await chatClientInstance.connectUser(
+            { id: userId, name: userName, image: userImage },
+            chatToken
+          );
+        }
+
         setChatClient(chatClientInstance);
 
         const chatChannel = chatClientInstance.channel("messaging", session.callId);
@@ -64,9 +68,7 @@ function useStreamClient(session, loadingSession, isHost, isParticipant) {
 
     if (session && !loadingSession) initCall();
 
-    // cleanup - performance reasons
     return () => {
-      // iife
       (async () => {
         try {
           if (videoCall) await videoCall.leave();
@@ -79,13 +81,7 @@ function useStreamClient(session, loadingSession, isHost, isParticipant) {
     };
   }, [session, loadingSession, isHost, isParticipant]);
 
-  return {
-    streamClient,
-    call,
-    chatClient,
-    channel,
-    isInitializingCall,
-  };
+  return { streamClient, call, chatClient, channel, isInitializingCall };
 }
 
 export default useStreamClient;
